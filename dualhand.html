@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <title>Dual Hand Particles</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin:0; overflow:hidden; background:#000; font-family:'Courier New',monospace; touch-action:none; }
+
+        #hud {
+            position:absolute; top:0; left:0; right:0;
+            display:flex; justify-content:space-between; align-items:flex-start;
+            padding:12px 14px; pointer-events:none; z-index:10;
+        }
+        .hand-panel {
+            background:rgba(0,0,0,0.62);
+            border:1px solid rgba(255,255,255,0.1);
+            border-radius:10px; padding:9px 13px;
+            min-width:155px; backdrop-filter:blur(6px);
+        }
+        .hand-panel h4 { margin:0 0 5px 0; font-size:0.63rem; letter-spacing:3px; text-transform:uppercase; font-weight:400; }
+        .right-panel h4 { color:#4facfe; }
+        .left-panel  h4 { color:#f97fff; }
+        .hand-panel p { margin:1px 0; font-size:0.61rem; color:rgba(255,255,255,0.65); line-height:1.6; }
+        hr.sep { border:none; border-top:1px solid rgba(255,255,255,0.1); margin:5px 0; }
+
+        #center-status {
+            position:absolute; top:12px; left:50%; transform:translateX(-50%);
+            text-align:center; pointer-events:none; z-index:10; white-space:nowrap;
+        }
+        #shape-sub  { font-size:0.55rem; letter-spacing:4px; text-transform:uppercase; color:rgba(255,255,255,0.35); margin-bottom:2px; }
+        #shape-name { font-size:1.05rem; letter-spacing:6px; text-transform:uppercase; color:#fff; text-shadow:0 0 18px rgba(255,255,255,0.5); transition:color .3s; }
+
+        #shape-strip {
+            position:absolute; bottom:22px; left:50%; transform:translateX(-50%);
+            display:flex; gap:5px; pointer-events:none; z-index:10; flex-wrap:wrap; justify-content:center; max-width:300px;
+        }
+        .sdot {
+            width:6px; height:6px; border-radius:50%;
+            background:rgba(255,255,255,0.18); transition:background .3s, transform .3s;
+            flex-shrink:0;
+        }
+        .sdot.active { background:#4facfe; transform:scale(1.7); }
+
+        #video-container {
+            position:absolute; bottom:16px; right:16px;
+            width:126px; height:95px; z-index:2;
+            border:1px solid rgba(255,255,255,0.12);
+            border-radius:10px; overflow:hidden;
+            transform:scaleX(-1);
+            box-shadow:0 4px 20px rgba(0,0,0,0.6);
+            background:#0a0a0a;
+        }
+        video { width:100%; height:100%; object-fit:cover; }
+
+        #color-ring {
+            position:absolute; bottom:16px; left:16px;
+            width:38px; height:38px; border-radius:50%;
+            border:2px solid rgba(255,255,255,0.25);
+            transition:background .4s, box-shadow .4s; z-index:10;
+        }
+        #fx-tag { position:absolute; bottom:58px; left:16px; font-size:0.55rem; letter-spacing:3px; text-transform:uppercase; color:rgba(255,255,255,0.3); z-index:10; }
+        #fx-name { position:absolute; bottom:72px; left:16px; font-size:0.7rem; letter-spacing:2px; text-transform:uppercase; color:#f97fff; z-index:10; text-shadow:0 0 10px #f97fff88; }
+    </style>
+</head>
+<body>
+
+<div id="hud">
+    <div class="hand-panel right-panel">
+        <h4>✋ Right — Shapes</h4>
+        <p>✊ 0 → Sphere</p>
+        <p>☝️ 1 → Heart</p>
+        <p>✌️ 2 → Saturn</p>
+        <p>🤟 3 → Helix</p>
+        <p>🖖 4 → Cube</p>
+        <p>🖐 5 → Galaxy</p>
+        <hr class="sep">
+        <p>👌 <b style="color:#4facfe">Pinch</b> → Cycle 18 shapes</p>
+    </div>
+
+    <div id="center-status">
+        <div id="shape-sub">Current Shape</div>
+        <div id="shape-name">Sphere</div>
+    </div>
+
+    <div class="hand-panel left-panel">
+        <h4>🤚 Left — FX</h4>
+        <p>✊ 0 → Normal</p>
+        <p>☝️ 1 → Pulse</p>
+        <p>✌️ 2 → Vortex</p>
+        <p>🤟 3 → Scatter</p>
+        <p>🖖 4 → Wave</p>
+        <p>🖐 5 → <b style="color:#f97fff">BLAST</b></p>
+        <hr class="sep">
+        <p>👌 <b style="color:#f97fff">Pinch</b> → Cycle colors</p>
+    </div>
+</div>
+
+<div id="fx-name">NORMAL</div>
+<div id="fx-tag">Effect</div>
+<div id="color-ring"></div>
+<div id="shape-strip"></div>
+
+<div id="video-container">
+    <video id="webcam" autoplay playsinline webkit-playsinline muted></video>
+</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+
+const IS_MOBILE = window.innerWidth < 600;
+const PARTICLE_COUNT = IS_MOBILE ? 8000 : 22000;
+const PARTICLE_SIZE  = IS_MOBILE ? 0.14 : 0.075;
+const LERP_BASE = 0.07;
+
+let currentShapeIdx = 0;
+let rightHand = { x:0, y:0, detected:false, pinching:false, fingers:0 };
+let leftHand  = { x:0, y:0, detected:false, pinching:false, fingers:0 };
+let isBlast = false;
+let leftEffect = 'normal';
+let colorIndex = 0;
+let rightPinchCooldown = 0;
+let leftPinchCooldown  = 0;
+
+const COLOR_PALETTES = [
+    { h1:0.58, h2:0.72 }, // Electric blue-purple
+    { h1:0.02, h2:0.10 }, // Fire
+    { h1:0.35, h2:0.48 }, // Emerald
+    { h1:0.88, h2:0.98 }, // Rose
+    { h1:0.10, h2:0.18 }, // Gold
+    { h1:0.50, h2:0.60 }, // Ice cyan
+    { h1:0.72, h2:0.82 }, // Lavender
+    { h1:0.05, h2:0.14 }, // Sunset orange
+];
+
+// Three.js
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, 0.018);
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
+camera.position.z = 14;
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const geo = new THREE.BufferGeometry();
+const positions = new Float32Array(PARTICLE_COUNT * 3);
+const targets   = new Float32Array(PARTICLE_COUNT * 3);
+const colors    = new Float32Array(PARTICLE_COUNT * 3);
+const col = new THREE.Color();
+
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+    positions[i*3]   = (Math.random()-.5)*30;
+    positions[i*3+1] = (Math.random()-.5)*30;
+    positions[i*3+2] = (Math.random()-.5)*30;
+    setPaletteColor(i, 0);
+}
+geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geo.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+
+const mat = new THREE.PointsMaterial({ size:PARTICLE_SIZE, vertexColors:true, blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.85 });
+const ps = new THREE.Points(geo, mat);
+scene.add(ps);
+
+function setPaletteColor(i, pi) {
+    const p = COLOR_PALETTES[pi];
+    col.setHSL(p.h1 + Math.random()*(p.h2-p.h1), 0.95, 0.6);
+    colors[i*3]=col.r; colors[i*3+1]=col.g; colors[i*3+2]=col.b;
+}
+
+// ── 18 Shapes ──
+const SHAPES = [
+    { name:'Sphere', fn:(i)=>{
+        const r=5,t=Math.random()*Math.PI*2,p=Math.acos(Math.random()*2-1);
+        return [r*Math.sin(p)*Math.cos(t),r*Math.sin(p)*Math.sin(t),r*Math.cos(p)];
+    }},
+    { name:'Heart', fn:(i)=>{
+        const t=Math.random()*Math.PI*2,r=Math.pow(Math.random(),.3);
+        return [16*Math.pow(Math.sin(t),3)*.3*r,(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t))*.3*r,(Math.random()-.5)*5*r];
+    }},
+    { name:'Saturn', fn:(i)=>{
+        if(i%100<30){const r=2.5,t=Math.random()*Math.PI*2,p=Math.acos(Math.random()*2-1);return[r*Math.sin(p)*Math.cos(t),r*Math.sin(p)*Math.sin(t),r*Math.cos(p)];}
+        const a=Math.random()*Math.PI*2,r=3.5+Math.random()*3;return[Math.cos(a)*r,(Math.random()-.5)*.25,Math.sin(a)*r];
+    }},
+    { name:'Helix', fn:(i)=>{
+        const t=(i/PARTICLE_COUNT)*Math.PI*16-Math.PI*8,o=(i%2===0)?0:Math.PI;
+        return[3*Math.cos(t+o)+(Math.random()-.5)*.8,t*.6+(Math.random()-.5)*.8,3*Math.sin(t+o)+(Math.random()-.5)*.8];
+    }},
+    { name:'Cube', fn:(i)=>{
+        const s=7,face=Math.floor(Math.random()*6),u=(Math.random()-.5)*s,v=(Math.random()-.5)*s,w=s/2;
+        if(i%5<4){if(face===0)return[w,u,v];if(face===1)return[-w,u,v];if(face===2)return[u,w,v];if(face===3)return[u,-w,v];if(face===4)return[u,v,w];return[u,v,-w];}
+        return[(Math.random()-.5)*s,(Math.random()-.5)*s,(Math.random()-.5)*s];
+    }},
+    { name:'Galaxy', fn:(i)=>{
+        const arm=Math.floor(Math.random()*3),t=Math.pow(Math.random(),.5)*Math.PI*4,r=t*.8,sp=.4+r*.12,a=t+(arm/3)*Math.PI*2;
+        return[Math.cos(a)*r+(Math.random()-.5)*sp,(Math.random()-.5)*sp*.5,Math.sin(a)*r+(Math.random()-.5)*sp];
+    }},
+    { name:'Torus', fn:(i)=>{
+        const R=4,r=1.5,u=Math.random()*Math.PI*2,v=Math.random()*Math.PI*2;
+        return[(R+r*Math.cos(v))*Math.cos(u),(R+r*Math.cos(v))*Math.sin(u),r*Math.sin(v)];
+    }},
+    { name:'DNA', fn:(i)=>{
+        const t=(i/PARTICLE_COUNT)*Math.PI*20-Math.PI*10,s=i%3;
+        if(s<2){const o=s*Math.PI;return[2.5*Math.cos(t+o)+(Math.random()-.5)*.4,t*.4+(Math.random()-.5)*.3,2.5*Math.sin(t+o)+(Math.random()-.5)*.4];}
+        const rt=Math.round(t/(Math.PI*.5))*Math.PI*.5,f=Math.random();return[Math.cos(rt)*f*2.5,rt*.4,Math.sin(rt)*f*2.5];
+    }},
+    { name:'Möbius', fn:(i)=>{
+        const u=Math.random()*Math.PI*2,v=(Math.random()-.5)*1.5;
+        return[(3+v*.5*Math.cos(u/2))*Math.cos(u),(3+v*.5*Math.cos(u/2))*Math.sin(u),v*.5*Math.sin(u/2)];
+    }},
+    { name:'Trefoil', fn:(i)=>{
+        const t=(i/PARTICLE_COUNT)*Math.PI*2,s=2.2+(Math.random()-.5)*.35;
+        return[(Math.sin(t)+2*Math.sin(2*t))*s,(Math.cos(t)-2*Math.cos(2*t))*s,-Math.sin(3*t)*s];
+    }},
+    { name:'Rose', fn:(i)=>{
+        const k=5,t=Math.random()*Math.PI*2,r=5*Math.cos(k*t);
+        return[r*Math.cos(t),(Math.random()-.5)*2.5,r*Math.sin(t)];
+    }},
+    { name:'Butterfly', fn:(i)=>{
+        const t=Math.random()*Math.PI*12,e=Math.exp(Math.cos(t))-2*Math.cos(4*t)-Math.pow(Math.sin(t/12),5);
+        return[Math.sin(t)*e*1.5,(Math.random()-.5)*1.5,Math.cos(t)*e*1.5];
+    }},
+    { name:'Icosahedron', fn:(i)=>{
+        const phi=(1+Math.sqrt(5))/2;
+        const verts=[[0,1,phi],[0,-1,phi],[0,1,-phi],[0,-1,-phi],[1,phi,0],[-1,phi,0],[1,-phi,0],[-1,-phi,0],[phi,0,1],[-phi,0,1],[phi,0,-1],[-phi,0,-1]];
+        const v=verts[Math.floor(Math.random()*verts.length)],len=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
+        return[v[0]/len*5+(Math.random()-.5)*.3,v[1]/len*5+(Math.random()-.5)*.3,v[2]/len*5+(Math.random()-.5)*.3];
+    }},
+    { name:'Tornado', fn:(i)=>{
+        const t=(i/PARTICLE_COUNT)*Math.PI*20-Math.PI*10,h=t*.4,r=Math.abs(h)*.6+.3,a=t*3+(Math.random()-.5)*.5;
+        return[Math.cos(a)*r+(Math.random()-.5)*.3,h,Math.sin(a)*r+(Math.random()-.5)*.3];
+    }},
+    { name:'Star', fn:(i)=>{
+        const k=8,t=Math.random()*Math.PI*2,inner=2.2,outer=5;
+        const seg=Math.floor(t/(Math.PI*2/k)),segT=(t%(Math.PI*2/k))/(Math.PI*2/k);
+        const r=inner+(outer-inner)*Math.abs(Math.sin(segT*Math.PI))+(Math.random()-.5)*.8;
+        return[Math.cos(t)*r,Math.sin(t)*r,(Math.random()-.5)*2];
+    }},
+    { name:'Portal', fn:(i)=>{
+        const ring=i%5,a=Math.random()*Math.PI*2;
+        const radii=[5,4,2.8,1.5,.5],depths=[-2,-1,0,1,2];
+        return[Math.cos(a)*radii[ring]+(Math.random()-.5)*.2,Math.sin(a)*radii[ring]+(Math.random()-.5)*.2,depths[ring]+(Math.random()-.5)*.2];
+    }},
+    { name:'Mushroom', fn:(i)=>{
+        if(i%100<65){const t=Math.random()*Math.PI*2,p=Math.random()*Math.PI*.55,r=4.5;return[r*Math.sin(p)*Math.cos(t),r*Math.cos(p)+1.5,r*Math.sin(p)*Math.sin(t)];}
+        const h=Math.random()*3.5-3,sr=(Math.random()*.8+.4)*(1-h*.15),a=Math.random()*Math.PI*2;return[Math.cos(a)*sr,h,Math.sin(a)*sr];
+    }},
+    { name:'Klein', fn:(i)=>{
+        const u=Math.random()*Math.PI*2,v=Math.random()*Math.PI*2;
+        let x,y,z;
+        if(u<Math.PI){x=3*Math.cos(u)*(1+Math.sin(u))+2*(1-Math.cos(u)/2)*Math.cos(u)*Math.cos(v);z=-8*Math.sin(u)-(2*(1-Math.cos(u)/2))*Math.sin(u)*Math.cos(v);}
+        else{x=3*Math.cos(u)*(1+Math.sin(u))+2*(1-Math.cos(u)/2)*Math.cos(v+Math.PI);z=-8*Math.sin(u);}
+        y=2*(1-Math.cos(u)/2)*Math.sin(v);return[x*.38,y*.38,z*.38];
+    }},
+];
+
+// Build dots
+const stripEl = document.getElementById('shape-strip');
+SHAPES.forEach((_,i)=>{
+    const d=document.createElement('div');
+    d.className='sdot'+(i===0?' active':'');
+    stripEl.appendChild(d);
+});
+
+function updateTargets(idx) {
+    const fn=SHAPES[idx].fn;
+    for(let i=0;i<PARTICLE_COUNT;i++){const [x,y,z]=fn(i);targets[i*3]=x;targets[i*3+1]=y;targets[i*3+2]=z;}
+    document.getElementById('shape-name').textContent=SHAPES[idx].name.toUpperCase();
+    document.querySelectorAll('.sdot').forEach((d,i)=>d.classList.toggle('active',i===idx));
+}
+updateTargets(0);
+
+const FINGER_SHAPE=[0,1,2,3,4,5];
+
+// MediaPipe
+let handLandmarker;
+const video=document.getElementById('webcam');
+
+async function setupVision() {
+    const vision=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+    handLandmarker=await HandLandmarker.createFromOptions(vision,{
+        baseOptions:{modelAssetPath:`https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,delegate:"GPU"},
+        runningMode:"VIDEO",numHands:2
+    });
+    navigator.mediaDevices.getUserMedia({video:{facingMode:"user"}}).then(stream=>{
+        video.srcObject=stream;video.addEventListener('loadeddata',predict);
+    });
+}
+
+function getFingers(lm){
+    const tips=[8,12,16,20],pips=[6,10,14,18];let c=0;
+    tips.forEach((t,i)=>{if(lm[t].y<lm[pips[i]].y)c++;});
+    if(Math.abs(lm[4].x-lm[2].x)>0.04)c++;return c;
+}
+function getPinch(lm){return Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y)<0.055;}
+function getPos(lm){return{x:(lm[9].x-.5)*2,y:-(lm[9].y-.5)*2};}
+
+let lastVideoTime=-1;
+async function predict(){
+    if(handLandmarker&&video.currentTime!==lastVideoTime){
+        lastVideoTime=video.currentTime;
+        const res=handLandmarker.detectForVideo(video,performance.now());
+        rightHand.detected=false;leftHand.detected=false;
+        if(res.landmarks.length>0){
+            res.landmarks.forEach((lm,idx)=>{
+                const isRight=(res.handednesses[idx][0].categoryName==='Left');
+                const hand=isRight?rightHand:leftHand;
+                hand.detected=true;hand.fingers=getFingers(lm);hand.pinching=getPinch(lm);
+                const pos=getPos(lm);hand.x=pos.x;hand.y=pos.y;
+            });
+        }
+        if(rightHand.detected){
+            if(rightHand.pinching&&rightPinchCooldown<=0){
+                currentShapeIdx=(currentShapeIdx+1)%SHAPES.length;
+                updateTargets(currentShapeIdx);rightPinchCooldown=35;
+            } else if(!rightHand.pinching){
+                const idx=FINGER_SHAPE[Math.min(rightHand.fingers,5)];
+                if(idx!==currentShapeIdx){currentShapeIdx=idx;updateTargets(currentShapeIdx);}
+            }
+        }
+        if(rightPinchCooldown>0)rightPinchCooldown--;
+
+        isBlast=false;leftEffect='normal';
+        if(leftHand.detected){
+            const f=leftHand.fingers;
+            if(f===5)isBlast=true;
+            else if(f===1)leftEffect='pulse';
+            else if(f===2)leftEffect='vortex';
+            else if(f===3)leftEffect='scatter';
+            else if(f===4)leftEffect='wave';
+            if(leftHand.pinching&&leftPinchCooldown<=0){
+                colorIndex=(colorIndex+1)%COLOR_PALETTES.length;
+                for(let i=0;i<PARTICLE_COUNT;i++)setPaletteColor(i,colorIndex);
+                geo.attributes.color.needsUpdate=true;
+                leftPinchCooldown=40;refreshColorUI();
+            }
+        }
+        if(leftPinchCooldown>0)leftPinchCooldown--;
+        document.getElementById('fx-name').textContent=isBlast?'BLAST':leftEffect.toUpperCase();
+    }
+    requestAnimationFrame(predict);
+}
+
+function refreshColorUI(){
+    const p=COLOR_PALETTES[colorIndex];col.setHSL((p.h1+p.h2)/2,.9,.55);
+    const hex='#'+col.getHexString();
+    document.getElementById('color-ring').style.background=hex;
+    document.getElementById('color-ring').style.boxShadow=`0 0 18px ${hex}99`;
+}
+refreshColorUI();
+setupVision();
+
+// Animate
+const clock=new THREE.Clock();
+const targetPos=new THREE.Vector3();
+
+function animate(){
+    requestAnimationFrame(animate);
+    const time=clock.getElapsedTime();
+    const isDragging=rightHand.detected&&rightHand.pinching;
+
+    if(!isDragging){
+        ps.rotation.y+=0.0007;
+        if(rightHand.detected){ps.rotation.x+=(rightHand.y*.3-ps.rotation.x)*.04;ps.rotation.y+=(-rightHand.x*.3-ps.rotation.y)*.04;}
+        if(leftHand.detected&&!isBlast){ps.rotation.z+=(leftHand.x*.15-ps.rotation.z)*.03;}
+    }
+    targetPos.set(isDragging?rightHand.x*11:0,isDragging?rightHand.y*7.5:0,0);
+    ps.position.lerp(targetPos,.14);
+
+    const p=geo.attributes.position.array;
+    const c=geo.attributes.color.array;
+    const pal=COLOR_PALETTES[colorIndex];
+
+    for(let i=0;i<PARTICLE_COUNT;i++){
+        const ix=i*3;
+        let tx=targets[ix],ty=targets[ix+1],tz=targets[ix+2];
+        let speed=LERP_BASE;
+
+        if(isBlast){
+            p[ix]+=(tx*6-p[ix])*.15;p[ix+1]+=(ty*6-p[ix+1])*.15;p[ix+2]+=(tz*6-p[ix+2])*.15;
+            c[ix]+=(1.0-c[ix])*.15;c[ix+1]+=(.85-c[ix+1])*.15;c[ix+2]+=(.2-c[ix+2])*.15;
+            continue;
+        }
+
+        if(leftEffect==='pulse'){const pu=1+.4*Math.sin(time*4+i*.01);tx*=pu;ty*=pu;tz*=pu;speed=.12;}
+        else if(leftEffect==='vortex'){const a=Math.atan2(tz,tx)+.05,r=Math.sqrt(tx*tx+tz*tz);tx=Math.cos(a)*r;tz=Math.sin(a)*r;speed=.05;}
+        else if(leftEffect==='scatter'){const j=2.5;tx+=Math.sin(time*3+i*.07)*j;ty+=Math.cos(time*2.5+i*.09)*j;tz+=Math.sin(time*2+i*.05)*j;speed=.06;}
+        else if(leftEffect==='wave'){ty+=Math.sin(Math.sqrt(tx*tx+tz*tz)*1.2-time*3)*1.5;speed=.09;}
+
+        p[ix]+=(tx-p[ix])*speed;p[ix+1]+=(ty-p[ix+1])*speed;p[ix+2]+=(tz-p[ix+2])*speed;
+
+        col.setHSL(pal.h1+(i*.000137%(pal.h2-pal.h1)),.9,leftEffect==='scatter'?.75:.6);
+        c[ix]+=(col.r-c[ix])*.012;c[ix+1]+=(col.g-c[ix+1])*.012;c[ix+2]+=(col.b-c[ix+2])*.012;
+    }
+
+    geo.attributes.position.needsUpdate=true;
+    geo.attributes.color.needsUpdate=true;
+    renderer.render(scene,camera);
+}
+animate();
+
+window.addEventListener('resize',()=>{
+    camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>
