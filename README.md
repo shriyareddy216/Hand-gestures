@@ -1,5 +1,7 @@
 # 🖐 Dual Hand Particle System
 
+Location of the website: https://shriyareddy216.github.io/Hand-gestures/
+
 An interactive 3D particle experience controlled entirely by your hands via webcam. No clicks, no keyboard — just gestures.
 
 Built with **Three.js** and **MediaPipe Hand Landmarker**.
